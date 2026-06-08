@@ -12,7 +12,8 @@ const workspaceRoot = process.cwd().endsWith(path.join("artifacts", "api-server"
 const disksDir = path.resolve(workspaceRoot, "artifacts/api-server/disks");
 const monitorSocket = path.resolve(workspaceRoot, "artifacts/api-server/data/qemu-monitor.sock");
 
-export const VNC_PORT = 5900;
+export const VNC_PORT = 5900; // kept for API compat — VNC now uses Unix socket
+export const VNC_SOCK = "/tmp/qemu-vnc.sock";
 export const AUDIO_PULSE_SOURCE = "qemu_capture.monitor";
 
 let vmProcess: ChildProcess | null = null;
@@ -132,9 +133,9 @@ export async function startVm(config: VmConfig): Promise<void> {
     throw new Error(`Disk image not found: ${diskPath}`);
   }
 
-  // Remove stale monitor socket so QEMU can create it fresh
-  if (fs.existsSync(monitorSocket)) {
-    try { fs.unlinkSync(monitorSocket); } catch (_) {}
+  // Remove stale sockets so QEMU can create them fresh
+  for (const sock of [monitorSocket, VNC_SOCK]) {
+    if (fs.existsSync(sock)) { try { fs.unlinkSync(sock); } catch (_) {} }
   }
 
   // Prepare audio — retry hard before giving up
@@ -146,7 +147,7 @@ export async function startVm(config: VmConfig): Promise<void> {
     "-smp", String(config.cpus),
     "-drive", `file=${diskPath},if=ide,cache=writeback`,
     "-vga", config.vgaType,
-    "-vnc", `:0`,
+    "-vnc", `unix:${VNC_SOCK}`,
     "-boot", `order=${config.bootOrder}`,
     "-monitor", `unix:${monitorSocket},server,nowait`,
     "-display", "none",
