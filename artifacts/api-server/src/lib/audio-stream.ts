@@ -8,10 +8,10 @@ const SAMPLE_RATE = 44100;
 const CHANNELS = 2;
 const FORMAT = "s16le";
 
-// Same PA env as qemu.ts — parec must find the same daemon socket
+// Same PA env as qemu.ts — parec must connect to the same daemon socket
 const PA_ENV: Record<string, string> = {
   ...process.env as Record<string, string>,
-  XDG_RUNTIME_DIR: process.env["XDG_RUNTIME_DIR"] ?? "/tmp",
+  PULSE_SERVER: "unix:/run/pulse/native",
   HOME: process.env["HOME"] ?? "/root",
 };
 

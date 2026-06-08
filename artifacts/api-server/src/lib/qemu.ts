@@ -47,10 +47,15 @@ export function getUptime(): number | null {
   return Math.floor((Date.now() - vmStartTime) / 1000);
 }
 
-// PulseAudio env — ensure XDG_RUNTIME_DIR is set so PA can create its socket
+// PulseAudio server socket — always use the system-level socket path
+const PULSE_SERVER = "unix:/run/pulse/native";
+
+// Env for PA-aware processes: QEMU, parec, pactl
 const PA_ENV: Record<string, string> = {
   ...process.env as Record<string, string>,
-  XDG_RUNTIME_DIR: process.env["XDG_RUNTIME_DIR"] ?? "/tmp",
+  PULSE_SERVER,
+  // Tell QEMU's libpulse to output to our null sink (avoids broken out.sink= param)
+  PULSE_SINK: "qemu_capture",
   HOME: process.env["HOME"] ?? "/root",
 };
 
@@ -125,8 +130,9 @@ export async function startVm(config: VmConfig): Promise<void> {
   ];
 
   if (audioReady) {
+    // No out.sink= param — PULSE_SINK env var routes output to qemu_capture sink
     args.push(
-      "-audiodev", `pa,id=pa0,out.sink=qemu_capture`,
+      "-audiodev", `pa,id=pa0`,
       "-device", "intel-hda",
       "-device", "hda-duplex,audiodev=pa0"
     );
