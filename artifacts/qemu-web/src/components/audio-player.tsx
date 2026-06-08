@@ -12,15 +12,23 @@ export function AudioPlayer() {
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const nextTimeRef = useRef(0);
-  const gotMetaRef = useRef(false);
+  const sampleRateRef = useRef(44100);
+  const channelsRef = useRef(2);
+  const audioEnabledRef = useRef(false);
 
+  // Keep ref in sync with state so the WS message handler (closure) always sees current value
+  audioEnabledRef.current = audioEnabled;
+
+  // Create/destroy the WebSocket when VM starts/stops — NOT when audioEnabled changes
   useEffect(() => {
     if (!vmStatus?.running) {
       wsRef.current?.close();
       wsRef.current = null;
       audioCtxRef.current?.close();
       audioCtxRef.current = null;
+      nextTimeRef.current = 0;
       setConnected(false);
+      setAudioEnabled(false);
       return;
     }
 
@@ -30,33 +38,48 @@ export function AudioPlayer() {
       const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${wsProto}://${window.location.host}/api/audio`);
       ws.binaryType = "arraybuffer";
-      gotMetaRef.current = false;
-      nextTimeRef.current = 0;
 
       ws.onopen = () => setConnected(true);
-      ws.onclose = () => setConnected(false);
+      ws.onclose = () => {
+        setConnected(false);
+        wsRef.current = null;
+      };
 
       ws.onmessage = (e) => {
-        if (!gotMetaRef.current) {
-          gotMetaRef.current = true;
-          audioCtxRef.current = new AudioContext({ sampleRate: 44100 });
-          nextTimeRef.current = audioCtxRef.current.currentTime + 0.1;
+        // First message is JSON metadata
+        if (typeof e.data === "string") {
+          try {
+            const meta = JSON.parse(e.data);
+            sampleRateRef.current = meta.sampleRate ?? 44100;
+            channelsRef.current = meta.channels ?? 2;
+          } catch (_) {}
           return;
         }
-        if (!audioEnabled || !audioCtxRef.current) return;
+
+        // Binary PCM — only decode/play when enabled and AudioContext is ready
+        const ctx = audioCtxRef.current;
+        if (!audioEnabledRef.current || !ctx || ctx.state === "closed") return;
+
+        // Resume if suspended (shouldn't happen after user gesture, but safety net)
+        if (ctx.state === "suspended") {
+          ctx.resume().catch(() => {});
+          return;
+        }
 
         const pcm = new Int16Array(e.data);
-        const buf = audioCtxRef.current.createBuffer(2, pcm.length / 2, 44100);
-        const l = buf.getChannelData(0);
-        const r = buf.getChannelData(1);
-        for (let i = 0; i < pcm.length / 2; i++) {
-          l[i] = pcm[i * 2] / 32768;
-          r[i] = pcm[i * 2 + 1] / 32768;
+        const ch = channelsRef.current;
+        const frames = pcm.length / ch;
+        const buf = ctx.createBuffer(ch, frames, sampleRateRef.current);
+        for (let c = 0; c < ch; c++) {
+          const channelData = buf.getChannelData(c);
+          for (let i = 0; i < frames; i++) {
+            channelData[i] = pcm[i * ch + c] / 32768;
+          }
         }
-        const src = audioCtxRef.current.createBufferSource();
+        const src = ctx.createBufferSource();
         src.buffer = buf;
-        src.connect(audioCtxRef.current.destination);
-        const t = Math.max(nextTimeRef.current, audioCtxRef.current.currentTime + 0.05);
+        src.connect(ctx.destination);
+        const t = Math.max(nextTimeRef.current, ctx.currentTime + 0.05);
         src.start(t);
         nextTimeRef.current = t + buf.duration;
       };
@@ -72,7 +95,22 @@ export function AudioPlayer() {
       audioCtxRef.current?.close();
       audioCtxRef.current = null;
     };
-  }, [vmStatus?.running, audioEnabled]);
+  }, [vmStatus?.running]);
+
+  const handleToggle = () => {
+    if (!audioEnabled) {
+      // Enabling — create or resume AudioContext inside user gesture
+      if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+        audioCtxRef.current = new AudioContext({ sampleRate: sampleRateRef.current });
+        nextTimeRef.current = 0;
+      }
+      audioCtxRef.current.resume().catch(() => {});
+      setAudioEnabled(true);
+    } else {
+      // Muting — just disable, keep AudioContext alive
+      setAudioEnabled(false);
+    }
+  };
 
   return (
     <div className="flex items-center gap-2">
@@ -84,12 +122,7 @@ export function AudioPlayer() {
             ? "border-primary bg-primary/10 text-primary hover:bg-primary/20"
             : "border-primary/30 text-muted-foreground hover:border-primary hover:text-primary"
         }`}
-        onClick={() => {
-          if (!audioEnabled && audioCtxRef.current?.state === "suspended") {
-            audioCtxRef.current.resume();
-          }
-          setAudioEnabled(!audioEnabled);
-        }}
+        onClick={handleToggle}
         title={audioEnabled ? "Mute audio" : "Enable audio"}
       >
         {audioEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}

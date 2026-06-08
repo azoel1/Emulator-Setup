@@ -35,7 +35,6 @@ export function VncDisplay() {
       const rfb = new RFB(containerRef.current, wsUrl);
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
-      rfb.showDotCursor = true;  // software cursor — works in iframes without pointer lock
 
       rfb.addEventListener("connect", () => {
         console.log("[VNC] connected");
@@ -151,6 +150,7 @@ export function VncDisplay() {
     <div
       className="relative w-full h-full bg-black border border-primary/20 overflow-hidden"
       onClick={handleVncClick}
+      style={status === "connected" ? { cursor: "none" } : undefined}
     >
       <div ref={containerRef} className="absolute inset-0" tabIndex={0} />
 
