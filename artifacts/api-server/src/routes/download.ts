@@ -12,12 +12,14 @@ const disksDir = path.resolve(workspaceRoot, "artifacts/api-server/disks");
 
 const WINDOWS_XP_FILENAME = "windows-xp.qcow2";
 const WINDOWS_XP_URL = "https://archive.org/download/windows-xp_202105/Windows%20XP.qcow2";
+const PARALLEL_CHUNKS = 8;
 
 interface DownloadProgress {
   filename: string;
   status: "idle" | "downloading" | "done" | "error";
   downloaded: number;
   total: number;
+  speedBps: number;
   error?: string;
 }
 
@@ -26,76 +28,145 @@ const progress: DownloadProgress = {
   status: "idle",
   downloaded: 0,
   total: 0,
+  speedBps: 0,
 };
 
-function getFileSize(url: string): Promise<number> {
-  return new Promise((resolve) => {
+function resolveRedirects(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
     const lib = url.startsWith("https") ? https : http;
     const parsedUrl = new URL(url);
     const req = lib.request(
       { hostname: parsedUrl.hostname, path: parsedUrl.pathname + parsedUrl.search, method: "HEAD" },
       (res) => {
         if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          getFileSize(res.headers.location).then(resolve).catch(() => resolve(0));
+          resolveRedirects(res.headers.location).then(resolve).catch(reject);
           return;
         }
-        const len = parseInt(res.headers["content-length"] ?? "0", 10);
-        resolve(len || 0);
+        resolve(url);
       }
     );
-    req.on("error", () => resolve(0));
+    req.on("error", reject);
     req.end();
   });
 }
 
-function downloadFile(
-  url: string,
-  dest: string,
-  resumeFrom: number,
-  onData: (bytes: number) => void,
-  onTotal: (total: number) => void
-): Promise<void> {
+function getContentLength(url: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const headers: Record<string, string> = {};
-    if (resumeFrom > 0) {
-      headers["Range"] = `bytes=${resumeFrom}-`;
-    }
-
     const lib = url.startsWith("https") ? https : http;
     const parsedUrl = new URL(url);
-    const options = {
-      hostname: parsedUrl.hostname,
-      path: parsedUrl.pathname + parsedUrl.search,
-      method: "GET",
-      headers,
-    };
-
-    const req = lib.request(options, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        downloadFile(res.headers.location, dest, resumeFrom, onData, onTotal).then(resolve).catch(reject);
-        return;
+    const req = lib.request(
+      { hostname: parsedUrl.hostname, path: parsedUrl.pathname + parsedUrl.search, method: "HEAD" },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          getContentLength(res.headers.location).then(resolve).catch(reject);
+          return;
+        }
+        const len = parseInt(res.headers["content-length"] ?? "0", 10);
+        if (len > 0) resolve(len);
+        else reject(new Error(`No content-length from HEAD (status ${res.statusCode})`));
       }
-      if (!res.statusCode || (res.statusCode !== 200 && res.statusCode !== 206)) {
-        reject(new Error(`HTTP ${res.statusCode}`));
-        return;
-      }
-
-      const contentLength = parseInt(res.headers["content-length"] ?? "0", 10);
-      if (contentLength > 0) {
-        onTotal(resumeFrom + contentLength);
-      }
-
-      const flags = resumeFrom > 0 ? "a" : "w";
-      const ws = fs.createWriteStream(dest, { flags });
-      res.on("data", (chunk: Buffer) => onData(chunk.length));
-      res.pipe(ws);
-      ws.on("finish", resolve);
-      ws.on("error", reject);
-      res.on("error", reject);
-    });
+    );
     req.on("error", reject);
     req.end();
   });
+}
+
+function downloadChunk(
+  url: string,
+  dest: string,
+  start: number,
+  end: number,
+  onData: (bytes: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith("https") ? https : http;
+    const parsedUrl = new URL(url);
+    const req = lib.request(
+      {
+        hostname: parsedUrl.hostname,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: "GET",
+        headers: { Range: `bytes=${start}-${end}` },
+      },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          downloadChunk(res.headers.location, dest, start, end, onData).then(resolve).catch(reject);
+          return;
+        }
+        if (res.statusCode !== 206 && res.statusCode !== 200) {
+          reject(new Error(`Chunk HTTP ${res.statusCode} for bytes=${start}-${end}`));
+          return;
+        }
+        const ws = fs.createWriteStream(dest, { flags: "w" });
+        res.on("data", (chunk: Buffer) => onData(chunk.length));
+        res.pipe(ws);
+        ws.on("finish", resolve);
+        ws.on("error", reject);
+        res.on("error", reject);
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+function assembleChunks(chunkPaths: string[], dest: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(dest, { flags: "w" });
+    let i = 0;
+    function next() {
+      if (i >= chunkPaths.length) {
+        ws.end();
+        ws.on("finish", resolve);
+        ws.on("error", reject);
+        return;
+      }
+      const rs = fs.createReadStream(chunkPaths[i++]);
+      rs.pipe(ws, { end: false });
+      rs.on("end", next);
+      rs.on("error", reject);
+    }
+    next();
+  });
+}
+
+let abortDownload = false;
+
+async function parallelDownload(
+  url: string,
+  dest: string,
+  totalSize: number,
+  onData: (bytes: number) => void
+): Promise<void> {
+  const chunkSize = Math.ceil(totalSize / PARALLEL_CHUNKS);
+  const chunkDir = dest + ".chunks";
+  if (!fs.existsSync(chunkDir)) fs.mkdirSync(chunkDir, { recursive: true });
+
+  const chunks: Array<{ start: number; end: number; path: string }> = [];
+  for (let i = 0; i < PARALLEL_CHUNKS; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize - 1, totalSize - 1);
+    chunks.push({ start, end, path: path.join(chunkDir, `chunk-${i}`) });
+  }
+
+  logger.info({ chunks: chunks.length, chunkSize }, "Starting parallel download");
+
+  await Promise.all(
+    chunks.map((c) => {
+      if (abortDownload) return Promise.reject(new Error("Aborted"));
+      return downloadChunk(url, c.path, c.start, c.end, onData);
+    })
+  );
+
+  if (abortDownload) throw new Error("Download aborted");
+
+  logger.info("All chunks downloaded, assembling...");
+  await assembleChunks(chunks.map((c) => c.path), dest);
+
+  for (const c of chunks) {
+    try { fs.unlinkSync(c.path); } catch {}
+  }
+  try { fs.rmdirSync(chunkDir); } catch {}
 }
 
 const router: IRouter = Router();
@@ -133,34 +204,39 @@ router.post("/download/windows-xp", async (_req, res): Promise<void> => {
     return;
   }
 
-  const resumeFrom = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
-
   progress.status = "downloading";
-  progress.downloaded = resumeFrom;
+  progress.downloaded = 0;
   progress.total = 0;
+  progress.speedBps = 0;
   progress.error = undefined;
+  abortDownload = false;
 
-  res.json({ message: resumeFrom > 0 ? `Resuming from ${Math.round(resumeFrom / 1024 / 1024)}MB` : "Download started", progress });
+  res.json({ message: `Starting parallel download (${PARALLEL_CHUNKS} connections)`, progress });
 
+  let speedInterval: ReturnType<typeof setInterval> | null = null;
   try {
-    if (progress.total === 0) {
-      logger.info("Getting file size from archive.org...");
-      const size = await getFileSize(WINDOWS_XP_URL);
-      if (size > 0) {
-        progress.total = size;
-        logger.info({ size }, "Got file size");
-      }
-    }
+    logger.info("Resolving final URL and getting file size...");
+    const finalUrl = await resolveRedirects(WINDOWS_XP_URL);
+    const totalSize = await getContentLength(finalUrl);
+    progress.total = totalSize;
+    logger.info({ totalSize, finalUrl }, "Starting parallel download");
 
-    logger.info({ resumeFrom, url: WINDOWS_XP_URL }, "Starting direct download from archive.org");
+    let lastDownloaded = 0;
+    speedInterval = setInterval(() => {
+      const delta = progress.downloaded - lastDownloaded;
+      progress.speedBps = delta * 2;
+      lastDownloaded = progress.downloaded;
+    }, 500);
 
-    await downloadFile(
-      WINDOWS_XP_URL,
+    await parallelDownload(
+      finalUrl,
       tempPath,
-      resumeFrom,
-      (bytes) => { progress.downloaded += bytes; },
-      (total) => { progress.total = total; }
+      totalSize,
+      (bytes) => { progress.downloaded += bytes; }
     );
+
+    if (speedInterval) clearInterval(speedInterval);
+    progress.speedBps = 0;
 
     fs.renameSync(tempPath, diskPath);
     progress.status = "done";
@@ -168,6 +244,8 @@ router.post("/download/windows-xp", async (_req, res): Promise<void> => {
     progress.total = progress.downloaded;
     logger.info("Windows XP download complete");
   } catch (e: unknown) {
+    if (speedInterval) clearInterval(speedInterval);
+    progress.speedBps = 0;
     progress.status = "error";
     progress.error = (e instanceof Error ? e.message : String(e));
     logger.error({ err: e }, "Windows XP download failed");
@@ -175,12 +253,18 @@ router.post("/download/windows-xp", async (_req, res): Promise<void> => {
 });
 
 router.delete("/download/windows-xp", (_req, res): void => {
+  abortDownload = true;
   const diskPath = path.join(disksDir, WINDOWS_XP_FILENAME);
   const tempPath = diskPath + ".tmp";
+  const chunkDir = tempPath + ".chunks";
   [diskPath, tempPath].forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
+  if (fs.existsSync(chunkDir)) {
+    try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
+  }
   progress.status = "idle";
   progress.downloaded = 0;
   progress.total = 0;
+  progress.speedBps = 0;
   progress.error = undefined;
   res.json({ message: "Deleted" });
 });
