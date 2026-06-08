@@ -4,7 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Keyboard as KeyboardIcon, Send, Type } from "lucide-react";
+import { Keyboard as KeyboardIcon, Send, Type, Loader2 } from "lucide-react";
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export function KeyboardPanel() {
   const sendKey = useSendKey();
@@ -13,6 +15,15 @@ export function KeyboardPanel() {
 
   const [customCombo, setCustomCombo] = useState("");
   const [textInput, setTextInput] = useState("");
+  const [runningMacro, setRunningMacro] = useState<string | null>(null);
+
+  const runMacro = async (name: string) => {
+    setRunningMacro(name);
+    try {
+      await fetch(`${BASE}/api/input/macro/${name}`, { method: "POST" });
+    } catch {}
+    setRunningMacro(null);
+  };
 
   const handleCombo = (combo: string) => {
     sendKey.mutate({ data: { combo } });
@@ -32,8 +43,42 @@ export function KeyboardPanel() {
     { label: "Esc", combo: "esc" },
   ];
 
+  const quickScripts = [
+    { name: "install-python", label: "Install Python 2.7", desc: "Opens IE → downloads python-2.7.18.msi" },
+    { name: "open-cmd", label: "Open CMD", desc: "Win+R → cmd" },
+    { name: "open-notepad", label: "Open Notepad", desc: "Win+R → notepad" },
+    { name: "open-ie", label: "Open IE", desc: "Win+R → iexplore" },
+  ];
+
   return (
     <div className="flex flex-col gap-5">
+
+      {/* Quick Scripts */}
+      <div>
+        <Label className="text-primary font-bold uppercase tracking-wider text-[10px] mb-2 block border-b border-primary/20 pb-1">
+          Quick Scripts
+        </Label>
+        <div className="flex flex-col gap-1.5">
+          {quickScripts.map(s => (
+            <Button
+              key={s.name}
+              variant="outline"
+              className="h-auto py-2 px-3 rounded-none border-primary/30 bg-black/40 hover:bg-primary hover:text-black active:bg-primary active:text-black touch-manipulation justify-start gap-2 text-left"
+              onClick={() => runMacro(s.name)}
+              disabled={runningMacro !== null}
+            >
+              {runningMacro === s.name
+                ? <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
+                : <span className="w-3 h-3 shrink-0 border border-primary/50 bg-primary/20 inline-block" />
+              }
+              <span className="flex flex-col items-start">
+                <span className="text-[11px] font-bold uppercase tracking-wider leading-tight">{s.label}</span>
+                <span className="text-[9px] text-muted-foreground font-mono leading-tight">{s.desc}</span>
+              </span>
+            </Button>
+          ))}
+        </div>
+      </div>
 
       {/* Function Keys */}
       <div>

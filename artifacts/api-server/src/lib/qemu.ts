@@ -51,11 +51,11 @@ export function getUptime(): number | null {
 const PULSE_SERVER = "unix:/run/pulse/native";
 
 // Env for PA-aware processes: QEMU, parec, pactl
+// XDG_RUNTIME_DIR must match where PulseAudio actually runs (/run/pulse/native)
 const PA_ENV: Record<string, string> = {
   ...process.env as Record<string, string>,
   PULSE_SERVER,
-  // QEMU's libpulse checks XDG_RUNTIME_DIR before anything else
-  XDG_RUNTIME_DIR: process.env["XDG_RUNTIME_DIR"] ?? "/tmp",
+  XDG_RUNTIME_DIR: "/run",
   // Route QEMU's output to our null sink (avoids unsupported out.sink= param)
   PULSE_SINK: "qemu_capture",
   HOME: process.env["HOME"] ?? "/root",
@@ -71,9 +71,14 @@ export function ensurePulseAudio(): boolean {
     try {
       // Start PulseAudio daemon if not running
       paExec("pulseaudio --start --daemonize --exit-idle-time=-1 2>/dev/null || true");
-      // Wait for daemon to be ready (longer on first attempt)
+      // Wait for daemon to be ready
       const waitMs = attempt === 1 ? 600 : 300;
       execSync(`sleep ${waitMs / 1000}`, { stdio: "ignore" });
+      // Write the PID file libpulse looks for at $XDG_RUNTIME_DIR/pulse/pid
+      try {
+        const pid = execSync("pgrep -x pulseaudio | head -1", { encoding: "utf8", env: PA_ENV }).trim();
+        if (pid) fs.writeFileSync("/run/pulse/pid", pid);
+      } catch (_) {}
       // Create the null sink QEMU will output to
       paExec(
         'pactl list sinks short 2>/dev/null | grep -q qemu_capture || ' +
@@ -93,6 +98,18 @@ export function ensurePulseAudio(): boolean {
     }
   }
   return false;
+}
+
+export async function runMacro(steps: Array<{ type: "key"; combo: string } | { type: "type"; text: string; enter?: boolean } | { type: "wait"; ms: number }>): Promise<void> {
+  for (const step of steps) {
+    if (step.type === "key") {
+      await sendKeyCombo(step.combo);
+    } else if (step.type === "type") {
+      await typeString(step.text, step.enter ?? false);
+    } else if (step.type === "wait") {
+      await new Promise((r) => setTimeout(r, step.ms));
+    }
+  }
 }
 
 export async function startVm(config: VmConfig): Promise<void> {
