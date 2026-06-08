@@ -118,6 +118,10 @@ export async function startVm(config: VmConfig): Promise<void> {
     await new Promise((r) => setTimeout(r, 1000));
   }
 
+  // Kill any orphaned QEMU processes that may still be holding the VNC port
+  try { execSync("pkill -9 qemu-system-x86_64 2>/dev/null || true", { stdio: "ignore" }); } catch (_) {}
+  await new Promise((r) => setTimeout(r, 400));
+
   ensureDisksDir();
 
   const diskPath = path.isAbsolute(config.diskImage)
