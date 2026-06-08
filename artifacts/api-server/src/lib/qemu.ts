@@ -54,7 +54,9 @@ const PULSE_SERVER = "unix:/run/pulse/native";
 const PA_ENV: Record<string, string> = {
   ...process.env as Record<string, string>,
   PULSE_SERVER,
-  // Tell QEMU's libpulse to output to our null sink (avoids broken out.sink= param)
+  // QEMU's libpulse checks XDG_RUNTIME_DIR before anything else
+  XDG_RUNTIME_DIR: process.env["XDG_RUNTIME_DIR"] ?? "/tmp",
+  // Route QEMU's output to our null sink (avoids unsupported out.sink= param)
   PULSE_SINK: "qemu_capture",
   HOME: process.env["HOME"] ?? "/root",
 };
