@@ -47,20 +47,24 @@ export function getUptime(): number | null {
   return Math.floor((Date.now() - vmStartTime) / 1000);
 }
 
-function ensurePulseAudio() {
+function ensurePulseAudio(): boolean {
   try {
     execSync("pulseaudio --start --daemonize 2>/dev/null || true", { stdio: "ignore" });
-    // Create virtual null sink for QEMU audio capture
-    try {
-      execSync(
-        'pactl list sinks short 2>/dev/null | grep -q qemu_capture || ' +
-        'pactl load-module module-null-sink sink_name=qemu_capture sink_properties=device.description=QEMU_Audio 2>/dev/null || true',
-        { stdio: "ignore" }
-      );
-    } catch (_) {}
+    // Give PA a moment to initialise before we query sinks
+    execSync("sleep 0.3", { stdio: "ignore" });
+    // Create virtual null sink for QEMU audio capture if it doesn't exist
+    execSync(
+      'pactl list sinks short 2>/dev/null | grep -q qemu_capture || ' +
+      'pactl load-module module-null-sink sink_name=qemu_capture sink_properties=device.description=QEMU_Audio 2>/dev/null || true',
+      { stdio: "ignore" }
+    );
+    // Verify sink actually exists now
+    execSync('pactl list sinks short 2>/dev/null | grep -q qemu_capture', { stdio: "ignore" });
     logger.info("PulseAudio ensured");
+    return true;
   } catch (e) {
-    logger.warn({ err: e }, "Could not start PulseAudio — audio may not work");
+    logger.warn({ err: e }, "Could not start PulseAudio or verify sink — disabling audio for this launch");
+    return false;
   }
 }
 
@@ -80,9 +84,13 @@ export async function startVm(config: VmConfig): Promise<void> {
     throw new Error(`Disk image not found: ${diskPath}`);
   }
 
-  if (config.audioEnabled) {
-    ensurePulseAudio();
+  // Remove stale monitor socket so QEMU can create it fresh
+  if (fs.existsSync(monitorSocket)) {
+    try { fs.unlinkSync(monitorSocket); } catch (_) {}
   }
+
+  // Only use audio if PulseAudio is actually ready
+  const audioReady = config.audioEnabled ? ensurePulseAudio() : false;
 
   const args: string[] = [
     "-machine", config.pcMode === "q35" ? "q35" : "pc",
@@ -96,7 +104,7 @@ export async function startVm(config: VmConfig): Promise<void> {
     "-display", "none",
   ];
 
-  if (config.audioEnabled) {
+  if (audioReady) {
     args.push(
       "-audiodev", `pa,id=pa0,out.sink=qemu_capture`,
       "-device", "intel-hda",
@@ -110,20 +118,23 @@ export async function startVm(config: VmConfig): Promise<void> {
 
   logger.info({ args }, "Starting QEMU");
 
-  vmProcess = spawn("qemu-system-x86_64", args, {
+  const proc = spawn("qemu-system-x86_64", args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
   });
 
+  vmProcess = proc;
   vmStartTime = Date.now();
   currentConfig = config;
 
-  const proc = vmProcess;
+  let stderrBuf = "";
   proc.stdout?.on("data", (d: Buffer) => {
-    logger.debug({ msg: d.toString() }, "QEMU stdout");
+    logger.info({ msg: d.toString().trim() }, "QEMU stdout");
   });
   proc.stderr?.on("data", (d: Buffer) => {
-    logger.debug({ msg: d.toString() }, "QEMU stderr");
+    const msg = d.toString().trim();
+    stderrBuf += msg + "\n";
+    logger.warn({ msg }, "QEMU stderr");
   });
   proc.on("exit", (code) => {
     logger.info({ code }, "QEMU process exited");
@@ -131,6 +142,13 @@ export async function startVm(config: VmConfig): Promise<void> {
     vmStartTime = null;
     currentConfig = null;
   });
+
+  // Wait briefly to catch immediate crashes
+  await new Promise((r) => setTimeout(r, 800));
+  if (proc.exitCode !== null) {
+    const reason = stderrBuf.trim() || `exit code ${proc.exitCode}`;
+    throw new Error(`QEMU failed to start: ${reason}`);
+  }
 }
 
 export async function stopVm(): Promise<void> {
@@ -146,6 +164,10 @@ export async function stopVm(): Promise<void> {
   }
   vmProcess = null;
   vmStartTime = null;
+  // Clean up stale socket so next start is clean
+  if (fs.existsSync(monitorSocket)) {
+    try { fs.unlinkSync(monitorSocket); } catch (_) {}
+  }
 }
 
 export async function resetVm(): Promise<void> {
