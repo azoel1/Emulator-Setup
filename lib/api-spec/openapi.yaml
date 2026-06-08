@@ -1,0 +1,469 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: QEMU Web Emulator API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: vm
+    description: VM lifecycle operations
+  - name: snapshots
+    description: Snapshot management
+  - name: input
+    description: Keyboard / text input to VM
+  - name: twitch
+    description: Twitch chat command integration
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /vm/status:
+    get:
+      operationId: getVmStatus
+      tags: [vm]
+      summary: Get current VM status
+      responses:
+        "200":
+          description: VM status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VmStatus"
+
+  /vm/start:
+    post:
+      operationId: startVm
+      tags: [vm]
+      summary: Start or restart the VM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VmConfig"
+      responses:
+        "200":
+          description: VM started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VmStatus"
+
+  /vm/stop:
+    post:
+      operationId: stopVm
+      tags: [vm]
+      summary: Stop the VM
+      responses:
+        "200":
+          description: VM stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VmStatus"
+
+  /vm/reset:
+    post:
+      operationId: resetVm
+      tags: [vm]
+      summary: Send ACPI reset to VM
+      responses:
+        "200":
+          description: Reset sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VmStatus"
+
+  /vm/config:
+    get:
+      operationId: getVmConfig
+      tags: [vm]
+      summary: Get current VM configuration
+      responses:
+        "200":
+          description: Current config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VmConfig"
+    put:
+      operationId: updateVmConfig
+      tags: [vm]
+      summary: Update VM configuration (takes effect on next start)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VmConfig"
+      responses:
+        "200":
+          description: Config saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VmConfig"
+
+  /vm/disk-images:
+    get:
+      operationId: listDiskImages
+      tags: [vm]
+      summary: List available disk images
+      responses:
+        "200":
+          description: List of images
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DiskImage"
+
+  /snapshots:
+    get:
+      operationId: listSnapshots
+      tags: [snapshots]
+      summary: List all snapshots
+      responses:
+        "200":
+          description: Snapshot list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Snapshot"
+    post:
+      operationId: createSnapshot
+      tags: [snapshots]
+      summary: Create a snapshot of the current VM state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotInput"
+      responses:
+        "201":
+          description: Snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+
+  /snapshots/{id}/restore:
+    post:
+      operationId: restoreSnapshot
+      tags: [snapshots]
+      summary: Restore a snapshot
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Snapshot restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VmStatus"
+
+  /snapshots/{id}:
+    delete:
+      operationId: deleteSnapshot
+      tags: [snapshots]
+      summary: Delete a snapshot
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+
+  /input/key:
+    post:
+      operationId: sendKey
+      tags: [input]
+      summary: Send a key combination to the VM (e.g. ctrl-alt-del)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyInput"
+      responses:
+        "200":
+          description: Key sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+
+  /input/type:
+    post:
+      operationId: typeText
+      tags: [input]
+      summary: Type text into the VM (no Enter)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TextInput"
+      responses:
+        "200":
+          description: Text typed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+
+  /input/send:
+    post:
+      operationId: sendText
+      tags: [input]
+      summary: Send text to the VM and press Enter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TextInput"
+      responses:
+        "200":
+          description: Text sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationResult"
+
+  /twitch/config:
+    get:
+      operationId: getTwitchConfig
+      tags: [twitch]
+      summary: Get Twitch integration configuration
+      responses:
+        "200":
+          description: Twitch config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwitchConfig"
+    put:
+      operationId: updateTwitchConfig
+      tags: [twitch]
+      summary: Update Twitch integration configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwitchConfig"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwitchConfig"
+
+  /twitch/command-log:
+    get:
+      operationId: getTwitchCommandLog
+      tags: [twitch]
+      summary: Get recent Twitch command history
+      responses:
+        "200":
+          description: Command log
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TwitchCommandEntry"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    VmStatus:
+      type: object
+      properties:
+        running:
+          type: boolean
+        pid:
+          type: ["integer", "null"]
+        vncPort:
+          type: ["integer", "null"]
+        audioWsPort:
+          type: ["integer", "null"]
+        uptime:
+          type: ["integer", "null"]
+        config:
+          $ref: "#/components/schemas/VmConfig"
+      required: [running]
+
+    VmConfig:
+      type: object
+      properties:
+        diskImage:
+          type: string
+          description: Path or URL to disk image
+        ram:
+          type: integer
+          description: RAM in MB
+          default: 512
+        cpus:
+          type: integer
+          description: Number of CPU cores
+          default: 2
+        audioEnabled:
+          type: boolean
+          default: true
+        audioDevice:
+          type: string
+          description: QEMU audio device type
+          default: "hda"
+        pcMode:
+          type: string
+          description: QEMU machine type (pc, q35)
+          default: "pc"
+        networkEnabled:
+          type: boolean
+          default: true
+        vgaType:
+          type: string
+          description: VGA adapter type (std, virtio, cirrus)
+          default: "std"
+        bootOrder:
+          type: string
+          description: Boot order (c=HDD, d=CD, n=Network)
+          default: "c"
+      required: [diskImage, ram, cpus]
+
+    DiskImage:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        sizeBytes:
+          type: ["integer", "null"]
+        isDefault:
+          type: boolean
+      required: [name, path]
+
+    Snapshot:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        description:
+          type: ["string", "null"]
+      required: [id, name, createdAt]
+
+    SnapshotInput:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: ["string", "null"]
+      required: [name]
+
+    KeyInput:
+      type: object
+      properties:
+        combo:
+          type: string
+          description: Key combo string e.g. "ctrl-alt-delete", "win-r", "f1"
+      required: [combo]
+
+    TextInput:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+
+    TwitchConfig:
+      type: object
+      properties:
+        channel:
+          type: string
+        enabled:
+          type: boolean
+        commandPrefix:
+          type: string
+          default: "!"
+        allowedUsers:
+          type: array
+          items:
+            type: string
+          description: Empty = all users allowed
+      required: [channel, enabled]
+
+    TwitchCommandEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        rawCommand:
+          type: string
+        parsedCommands:
+          type: array
+          items:
+            type: string
+        executedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          description: "executed | queued | error"
+      required: [id, username, rawCommand, parsedCommands, executedAt, status]
+
+    OperationResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: ["string", "null"]
+      required: [success]

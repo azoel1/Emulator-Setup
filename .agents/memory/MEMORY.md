@@ -1,0 +1,3 @@
+- [noVNC + Vite import fix](novnc-vite.md) — `@novnc/novnc` v1.7.0 exports field is a bare string `"./core/rfb.js"`, import as `@novnc/novnc` not `@novnc/novnc/core/rfb.js`
+- [QEMU Web Emulator architecture](qemu-arch.md) — Audio via PulseAudio→parec→WebSocket, VNC via noVNC WebSocket proxy, monitor via QMP socket
+- [VNC proxy fix](vnc-proxy-fix.md) — must proxy raw TCP to QEMU port 5900 (not 5700); resizeSession=false required

@@ -1,0 +1,2 @@
+artifacts/api-server/disks/windows-xp.qcow2.tmp filter=lfs diff=lfs merge=lfs -text
+artifacts/api-server/disks/windows-xp.qcow2 filter=lfs diff=lfs merge=lfs -text
