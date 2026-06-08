@@ -154,15 +154,13 @@ export async function startVm(config: VmConfig): Promise<void> {
   ];
 
   if (audioReady) {
-    // No out.sink= param — PULSE_SINK env var routes output to qemu_capture sink
+    // AC97 is natively supported by Windows XP — intel-hda requires drivers XP doesn't have
     args.push(
       "-audiodev", `pa,id=pa0`,
-      "-device", "intel-hda",
-      "-device", "hda-duplex,audiodev=pa0"
+      "-device", "AC97,audiodev=pa0"
     );
   } else if (config.audioEnabled) {
-    // PA failed — start QEMU with a dummy null audio backend so it doesn't crash
-    args.push("-audiodev", "none,id=pa0");
+    args.push("-audiodev", "none,id=pa0", "-device", "AC97,audiodev=pa0");
   }
 
   if (config.networkEnabled) {

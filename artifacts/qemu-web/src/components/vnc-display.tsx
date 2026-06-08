@@ -150,9 +150,9 @@ export function VncDisplay() {
     <div
       className="relative w-full h-full bg-black border border-primary/20 overflow-hidden"
       onClick={handleVncClick}
-      style={status === "connected" ? { cursor: "none" } : undefined}
+      style={undefined}
     >
-      <div ref={containerRef} className="absolute inset-0" tabIndex={0} />
+      <div ref={containerRef} className="vnc-container absolute inset-0" tabIndex={0} />
 
       {/* Offline — VM not running */}
       {showOfflineOverlay && (
