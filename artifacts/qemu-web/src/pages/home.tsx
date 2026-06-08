@@ -29,8 +29,8 @@ export default function Home() {
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 relative z-10">
 
         {/* VNC Area */}
-        <div className="shrink-0 lg:flex-1 h-[38vh] sm:h-[42vh] lg:h-auto lg:min-h-0 p-2 lg:p-3">
-          <div className="w-full h-full border border-primary/30 bg-black relative overflow-hidden">
+        <div className="shrink-0 lg:flex-1 h-[38vh] sm:h-[42vh] lg:h-auto p-2 lg:p-3">
+          <div className="w-full h-full border border-primary/30 bg-black relative">
             <VncDisplay />
           </div>
         </div>

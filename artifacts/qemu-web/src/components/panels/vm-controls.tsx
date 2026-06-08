@@ -27,7 +27,6 @@ interface DownloadProgress {
   status: "idle" | "downloading" | "done" | "error";
   downloaded: number;
   total: number;
-  speedBps: number;
   error?: string;
 }
 
@@ -60,24 +59,6 @@ function fmtBytes(b: number) {
   const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(b) / Math.log(k));
   return `${(b / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-function fmtSpeed(bps: number) {
-  if (bps <= 0) return null;
-  if (bps >= 1024 * 1024) return `${(bps / 1024 / 1024).toFixed(1)} MB/s`;
-  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
-  return `${bps} B/s`;
-}
-
-function fmtEta(downloaded: number, total: number, bps: number) {
-  if (bps <= 0 || total <= 0) return null;
-  const remaining = total - downloaded;
-  const secs = Math.round(remaining / bps);
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  if (m < 60) return `${m}m ${s}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 export function VmControls() {
@@ -263,7 +244,7 @@ export function VmControls() {
               <div className="flex items-center justify-between text-xs font-mono">
                 <span className="text-primary font-bold uppercase tracking-wider flex items-center gap-1">
                   <Loader2 className="w-3 h-3 animate-spin" />
-                  Downloading…
+                  Downloading Windows XP…
                 </span>
                 <span className="text-muted-foreground">
                   {dlPct !== null ? `${dlPct}%` : "…"}
@@ -275,19 +256,9 @@ export function VmControls() {
                   style={{ width: `${dlPct ?? 0}%` }}
                 />
               </div>
-              <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground">
-                <span>
-                  {fmtBytes(dlProgress.downloaded)}
-                  {dlProgress.total > 0 && ` / ${fmtBytes(dlProgress.total)}`}
-                </span>
-                <span className="flex items-center gap-2">
-                  {fmtSpeed(dlProgress.speedBps) && (
-                    <span className="text-primary font-bold">{fmtSpeed(dlProgress.speedBps)}</span>
-                  )}
-                  {fmtEta(dlProgress.downloaded, dlProgress.total, dlProgress.speedBps) && (
-                    <span>ETA {fmtEta(dlProgress.downloaded, dlProgress.total, dlProgress.speedBps)}</span>
-                  )}
-                </span>
+              <div className="text-[10px] text-muted-foreground font-mono text-right">
+                {fmtBytes(dlProgress.downloaded)}
+                {dlProgress.total > 0 && ` / ${fmtBytes(dlProgress.total)}`}
               </div>
             </div>
           )}

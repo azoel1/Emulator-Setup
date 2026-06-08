@@ -11,15 +11,16 @@ const workspaceRoot = process.cwd().endsWith(path.join("artifacts", "api-server"
 const disksDir = path.resolve(workspaceRoot, "artifacts/api-server/disks");
 
 const WINDOWS_XP_FILENAME = "windows-xp.qcow2";
-const WINDOWS_XP_URL = "https://archive.org/download/windows-xp_202105/Windows%20XP.qcow2";
-const PARALLEL_CHUNKS = 8;
+
+const LFS_OID = "94a292c46deea26d0d8f69b68833f5ccdbc3b42adaa2fbe1b1ea31c3c4da1548";
+const LFS_SIZE = 509214720;
+const LFS_BATCH_URL = "https://github.com/azoel1/Emulator-Setup.git/info/lfs/objects/batch";
 
 interface DownloadProgress {
   filename: string;
   status: "idle" | "downloading" | "done" | "error";
   downloaded: number;
   total: number;
-  speedBps: number;
   error?: string;
 }
 
@@ -27,161 +28,143 @@ const progress: DownloadProgress = {
   filename: WINDOWS_XP_FILENAME,
   status: "idle",
   downloaded: 0,
-  total: 0,
-  speedBps: 0,
+  total: LFS_SIZE,
 };
 
-function resolveRedirects(url: string): Promise<string> {
+function httpGet(url: string, headers: Record<string, string> = {}): Promise<{ statusCode: number; body: string; headers: Record<string, string> }> {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith("https") ? https : http;
     const parsedUrl = new URL(url);
-    const req = lib.request(
-      { hostname: parsedUrl.hostname, path: parsedUrl.pathname + parsedUrl.search, method: "HEAD" },
-      (res) => {
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          resolveRedirects(res.headers.location).then(resolve).catch(reject);
-          return;
-        }
-        resolve(url);
-      }
-    );
+    const options = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: "GET",
+      headers,
+    };
+    lib.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (d: Buffer) => chunks.push(d));
+      res.on("end", () => resolve({
+        statusCode: res.statusCode ?? 0,
+        body: Buffer.concat(chunks).toString("utf8"),
+        headers: res.headers as Record<string, string>,
+      }));
+      res.on("error", reject);
+    }).on("error", reject).end();
+  });
+}
+
+function httpPost(url: string, body: string, headers: Record<string, string> = {}): Promise<{ statusCode: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith("https") ? https : http;
+    const parsedUrl = new URL(url);
+    const buf = Buffer.from(body, "utf8");
+    const options = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: "POST",
+      headers: { ...headers, "Content-Length": buf.length },
+    };
+    const req = lib.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (d: Buffer) => chunks.push(d));
+      res.on("end", () => resolve({ statusCode: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("error", reject);
+    });
     req.on("error", reject);
+    req.write(buf);
     req.end();
   });
 }
 
-function getContentLength(url: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith("https") ? https : http;
-    const parsedUrl = new URL(url);
-    const req = lib.request(
-      { hostname: parsedUrl.hostname, path: parsedUrl.pathname + parsedUrl.search, method: "HEAD" },
-      (res) => {
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          getContentLength(res.headers.location).then(resolve).catch(reject);
-          return;
-        }
-        const len = parseInt(res.headers["content-length"] ?? "0", 10);
-        if (len > 0) resolve(len);
-        else reject(new Error(`No content-length from HEAD (status ${res.statusCode})`));
-      }
-    );
-    req.on("error", reject);
-    req.end();
+async function getLfsDownloadUrl(): Promise<string> {
+  const batchBody = JSON.stringify({
+    operation: "download",
+    transfers: ["basic"],
+    objects: [{ oid: LFS_OID, size: LFS_SIZE }],
   });
+  const res = await httpPost(LFS_BATCH_URL, batchBody, {
+    "Accept": "application/vnd.git-lfs+json",
+    "Content-Type": "application/vnd.git-lfs+json",
+  });
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(`LFS batch API returned ${res.statusCode}: ${res.body.slice(0, 200)}`);
+  }
+  const data = JSON.parse(res.body);
+  const obj = data.objects?.[0];
+  if (!obj) throw new Error("No objects in LFS response");
+  if (obj.error) throw new Error(`LFS error: ${obj.error.message}`);
+  const href = obj.actions?.download?.href;
+  if (!href) throw new Error("No download href in LFS response");
+  return href;
 }
 
-function downloadChunk(
+function downloadFile(
   url: string,
   dest: string,
-  start: number,
-  end: number,
-  onData: (bytes: number) => void
+  resumeFrom: number,
+  onData: (bytes: number) => void,
+  onTotal: (total: number) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = {};
+    if (resumeFrom > 0) {
+      headers["Range"] = `bytes=${resumeFrom}-`;
+    }
+
     const lib = url.startsWith("https") ? https : http;
     const parsedUrl = new URL(url);
-    const req = lib.request(
-      {
-        hostname: parsedUrl.hostname,
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: "GET",
-        headers: { Range: `bytes=${start}-${end}` },
-      },
-      (res) => {
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          downloadChunk(res.headers.location, dest, start, end, onData).then(resolve).catch(reject);
-          return;
-        }
-        if (res.statusCode !== 206 && res.statusCode !== 200) {
-          reject(new Error(`Chunk HTTP ${res.statusCode} for bytes=${start}-${end}`));
-          return;
-        }
-        const ws = fs.createWriteStream(dest, { flags: "w" });
-        res.on("data", (chunk: Buffer) => onData(chunk.length));
-        res.pipe(ws);
-        ws.on("finish", resolve);
-        ws.on("error", reject);
-        res.on("error", reject);
-      }
-    );
-    req.on("error", reject);
-    req.end();
-  });
-}
+    const options = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: "GET",
+      headers,
+    };
 
-function assembleChunks(chunkPaths: string[], dest: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const ws = fs.createWriteStream(dest, { flags: "w" });
-    let i = 0;
-    function next() {
-      if (i >= chunkPaths.length) {
-        ws.end();
-        ws.on("finish", resolve);
-        ws.on("error", reject);
+    const req = lib.request(options, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        downloadFile(res.headers.location, dest, resumeFrom, onData, onTotal).then(resolve).catch(reject);
         return;
       }
-      const rs = fs.createReadStream(chunkPaths[i++]);
-      rs.pipe(ws, { end: false });
-      rs.on("end", next);
-      rs.on("error", reject);
-    }
-    next();
+      if (!res.statusCode || (res.statusCode !== 200 && res.statusCode !== 206)) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+
+      const contentLength = parseInt(res.headers["content-length"] ?? "0", 10);
+      if (contentLength > 0) {
+        onTotal(resumeFrom + contentLength);
+      }
+
+      const flags = resumeFrom > 0 ? "a" : "w";
+      const ws = fs.createWriteStream(dest, { flags });
+      res.on("data", (chunk: Buffer) => onData(chunk.length));
+      res.pipe(ws);
+      ws.on("finish", resolve);
+      ws.on("error", reject);
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
   });
-}
-
-let abortDownload = false;
-
-async function parallelDownload(
-  url: string,
-  dest: string,
-  totalSize: number,
-  onData: (bytes: number) => void
-): Promise<void> {
-  const chunkSize = Math.ceil(totalSize / PARALLEL_CHUNKS);
-  const chunkDir = dest + ".chunks";
-  if (!fs.existsSync(chunkDir)) fs.mkdirSync(chunkDir, { recursive: true });
-
-  const chunks: Array<{ start: number; end: number; path: string }> = [];
-  for (let i = 0; i < PARALLEL_CHUNKS; i++) {
-    const start = i * chunkSize;
-    const end = Math.min(start + chunkSize - 1, totalSize - 1);
-    chunks.push({ start, end, path: path.join(chunkDir, `chunk-${i}`) });
-  }
-
-  logger.info({ chunks: chunks.length, chunkSize }, "Starting parallel download");
-
-  await Promise.all(
-    chunks.map((c) => {
-      if (abortDownload) return Promise.reject(new Error("Aborted"));
-      return downloadChunk(url, c.path, c.start, c.end, onData);
-    })
-  );
-
-  if (abortDownload) throw new Error("Download aborted");
-
-  logger.info("All chunks downloaded, assembling...");
-  await assembleChunks(chunks.map((c) => c.path), dest);
-
-  for (const c of chunks) {
-    try { fs.unlinkSync(c.path); } catch {}
-  }
-  try { fs.rmdirSync(chunkDir); } catch {}
 }
 
 const router: IRouter = Router();
 
-router.get("/download/status", async (_req, res): Promise<void> => {
+router.get("/download/status", (_req, res): void => {
   if (!fs.existsSync(disksDir)) fs.mkdirSync(disksDir, { recursive: true });
   const diskPath = path.join(disksDir, WINDOWS_XP_FILENAME);
-
   if (progress.status === "idle" && fs.existsSync(diskPath)) {
     const size = fs.statSync(diskPath).size;
-    progress.downloaded = size;
-    progress.total = size;
-    progress.status = "done";
+    if (size >= LFS_SIZE) {
+      progress.status = "done";
+      progress.downloaded = size;
+      progress.total = size;
+    } else {
+      progress.downloaded = size;
+      progress.total = LFS_SIZE;
+    }
   }
-
   res.json(progress);
 });
 
@@ -195,48 +178,35 @@ router.post("/download/windows-xp", async (_req, res): Promise<void> => {
     return;
   }
 
-  if (fs.existsSync(diskPath) && fs.statSync(diskPath).size > 0) {
-    const size = fs.statSync(diskPath).size;
+  if (fs.existsSync(diskPath) && fs.statSync(diskPath).size >= LFS_SIZE) {
     progress.status = "done";
-    progress.downloaded = size;
-    progress.total = size;
+    progress.downloaded = fs.statSync(diskPath).size;
+    progress.total = progress.downloaded;
     res.json({ message: "Already downloaded", progress });
     return;
   }
 
+  const resumeFrom = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
+
   progress.status = "downloading";
-  progress.downloaded = 0;
-  progress.total = 0;
-  progress.speedBps = 0;
+  progress.downloaded = resumeFrom;
+  progress.total = LFS_SIZE;
   progress.error = undefined;
-  abortDownload = false;
 
-  res.json({ message: `Starting parallel download (${PARALLEL_CHUNKS} connections)`, progress });
+  res.json({ message: resumeFrom > 0 ? `Resuming from ${Math.round(resumeFrom / 1024 / 1024)}MB` : "Download started", progress });
 
-  let speedInterval: ReturnType<typeof setInterval> | null = null;
   try {
-    logger.info("Resolving final URL and getting file size...");
-    const finalUrl = await resolveRedirects(WINDOWS_XP_URL);
-    const totalSize = await getContentLength(finalUrl);
-    progress.total = totalSize;
-    logger.info({ totalSize, finalUrl }, "Starting parallel download");
+    logger.info({ resumeFrom }, "Fetching GitHub LFS download URL");
+    const downloadUrl = await getLfsDownloadUrl();
+    logger.info("Got LFS URL, starting download");
 
-    let lastDownloaded = 0;
-    speedInterval = setInterval(() => {
-      const delta = progress.downloaded - lastDownloaded;
-      progress.speedBps = delta * 2;
-      lastDownloaded = progress.downloaded;
-    }, 500);
-
-    await parallelDownload(
-      finalUrl,
+    await downloadFile(
+      downloadUrl,
       tempPath,
-      totalSize,
-      (bytes) => { progress.downloaded += bytes; }
+      resumeFrom,
+      (bytes) => { progress.downloaded += bytes; },
+      (total) => { progress.total = total; }
     );
-
-    if (speedInterval) clearInterval(speedInterval);
-    progress.speedBps = 0;
 
     fs.renameSync(tempPath, diskPath);
     progress.status = "done";
@@ -244,8 +214,6 @@ router.post("/download/windows-xp", async (_req, res): Promise<void> => {
     progress.total = progress.downloaded;
     logger.info("Windows XP download complete");
   } catch (e: unknown) {
-    if (speedInterval) clearInterval(speedInterval);
-    progress.speedBps = 0;
     progress.status = "error";
     progress.error = (e instanceof Error ? e.message : String(e));
     logger.error({ err: e }, "Windows XP download failed");
@@ -253,18 +221,12 @@ router.post("/download/windows-xp", async (_req, res): Promise<void> => {
 });
 
 router.delete("/download/windows-xp", (_req, res): void => {
-  abortDownload = true;
   const diskPath = path.join(disksDir, WINDOWS_XP_FILENAME);
   const tempPath = diskPath + ".tmp";
-  const chunkDir = tempPath + ".chunks";
   [diskPath, tempPath].forEach(f => { try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch {} });
-  if (fs.existsSync(chunkDir)) {
-    try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch {}
-  }
   progress.status = "idle";
   progress.downloaded = 0;
-  progress.total = 0;
-  progress.speedBps = 0;
+  progress.total = LFS_SIZE;
   progress.error = undefined;
   res.json({ message: "Deleted" });
 });

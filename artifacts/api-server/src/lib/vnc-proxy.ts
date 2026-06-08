@@ -2,19 +2,19 @@ import { WebSocketServer, WebSocket } from "ws";
 import net from "net";
 import type { IncomingMessage } from "http";
 import { logger } from "./logger.js";
-import { VNC_SOCK } from "./qemu.js";
+import { VNC_PORT } from "./qemu.js";
 
 export function attachVncProxy(
   wss: WebSocketServer,
   req: IncomingMessage,
   ws: WebSocket
 ) {
-  logger.info("VNC WebSocket client connected — proxying to QEMU Unix socket");
+  logger.info("VNC WebSocket client connected — proxying to QEMU");
 
-  const target = net.createConnection({ path: VNC_SOCK });
+  const target = net.createConnection({ host: "127.0.0.1", port: VNC_PORT });
 
   target.on("error", (e) => {
-    logger.warn({ err: e }, "VNC proxy: could not connect to QEMU VNC socket");
+    logger.warn({ err: e }, "VNC proxy: could not connect to QEMU VNC");
     ws.close(1011, "QEMU VNC not available");
   });
 
