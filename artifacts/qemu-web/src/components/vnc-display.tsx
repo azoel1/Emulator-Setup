@@ -35,10 +35,14 @@ export function VncDisplay() {
       const rfb = new RFB(containerRef.current, wsUrl);
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
+      rfb.showDotCursor = true;  // software cursor — works in iframes without pointer lock
 
       rfb.addEventListener("connect", () => {
         console.log("[VNC] connected");
         setStatus("connected");
+        // Give the noVNC canvas focus so keyboard/mouse events are captured
+        try { (rfb as any).focus(); } catch (_) {}
+        containerRef.current?.focus();
         setRetryCount(0);
         if (retryTimerRef.current) {
           clearTimeout(retryTimerRef.current);
@@ -136,9 +140,19 @@ export function VncDisplay() {
   const showOfflineOverlay = !isVmRunning && !isLoadingStatus;
   const showConnectingOverlay = isVmRunning && status !== "connected";
 
+  const handleVncClick = useCallback(() => {
+    if (rfbRef.current && status === "connected") {
+      try { (rfbRef.current as any).focus(); } catch (_) {}
+    }
+    containerRef.current?.focus();
+  }, [status]);
+
   return (
-    <div className="relative w-full h-full bg-black border border-primary/20 overflow-hidden">
-      <div ref={containerRef} className="absolute inset-0" />
+    <div
+      className="relative w-full h-full bg-black border border-primary/20 overflow-hidden"
+      onClick={handleVncClick}
+    >
+      <div ref={containerRef} className="absolute inset-0" tabIndex={0} />
 
       {/* Offline — VM not running */}
       {showOfflineOverlay && (

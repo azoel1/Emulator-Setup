@@ -12,6 +12,7 @@ const FORMAT = "s16le";
 const PA_ENV: Record<string, string> = {
   ...process.env as Record<string, string>,
   PULSE_SERVER: "unix:/run/pulse/native",
+  XDG_RUNTIME_DIR: "/run",
   HOME: process.env["HOME"] ?? "/root",
 };
 
@@ -22,7 +23,7 @@ export function attachAudioStream(
   logger.info("Audio WebSocket client connected — starting parec");
 
   const parec: ChildProcessWithoutNullStreams = spawn("parec", [
-    "--source", AUDIO_PULSE_SOURCE,
+    "-d", AUDIO_PULSE_SOURCE,
     "--format", FORMAT,
     "--rate", String(SAMPLE_RATE),
     "--channels", String(CHANNELS),
@@ -31,7 +32,7 @@ export function attachAudioStream(
   ], { env: PA_ENV });
 
   parec.stderr.on("data", (d: Buffer) => {
-    logger.debug({ msg: d.toString() }, "parec stderr");
+    logger.warn({ msg: d.toString().trim() }, "parec stderr");
   });
 
   parec.on("error", (e) => {
