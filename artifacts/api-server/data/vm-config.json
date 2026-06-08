@@ -2,7 +2,7 @@
   "diskImage": "windows-xp.qcow2",
   "ram": 512,
   "cpus": 1,
-  "audioEnabled": false,
+  "audioEnabled": true,
   "audioDevice": "hda",
   "pcMode": "pc",
   "networkEnabled": true,

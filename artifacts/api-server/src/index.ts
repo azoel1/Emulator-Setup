@@ -6,6 +6,7 @@ import app from "./app.js";
 import { logger } from "./lib/logger.js";
 import { attachVncProxy } from "./lib/vnc-proxy.js";
 import { attachAudioStream } from "./lib/audio-stream.js";
+import { ensurePulseAudio } from "./lib/qemu.js";
 
 const rawPort = process.env["PORT"];
 
@@ -41,4 +42,9 @@ server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
 
 server.listen(port, () => {
   logger.info({ port }, "Server listening (HTTP + WebSocket)");
+  // Warm up PulseAudio at startup so it's ready when the VM starts
+  setTimeout(() => {
+    const ok = ensurePulseAudio();
+    logger.info({ ok }, "PulseAudio startup init");
+  }, 1000);
 });

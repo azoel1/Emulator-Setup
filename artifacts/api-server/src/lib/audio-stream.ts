@@ -8,6 +8,13 @@ const SAMPLE_RATE = 44100;
 const CHANNELS = 2;
 const FORMAT = "s16le";
 
+// Same PA env as qemu.ts — parec must find the same daemon socket
+const PA_ENV: Record<string, string> = {
+  ...process.env as Record<string, string>,
+  XDG_RUNTIME_DIR: process.env["XDG_RUNTIME_DIR"] ?? "/tmp",
+  HOME: process.env["HOME"] ?? "/root",
+};
+
 export function attachAudioStream(
   _req: IncomingMessage,
   ws: WebSocket
@@ -21,7 +28,7 @@ export function attachAudioStream(
     "--channels", String(CHANNELS),
     "--latency-msec=50",
     "--raw",
-  ]);
+  ], { env: PA_ENV });
 
   parec.stderr.on("data", (d: Buffer) => {
     logger.debug({ msg: d.toString() }, "parec stderr");

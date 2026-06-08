@@ -47,25 +47,45 @@ export function getUptime(): number | null {
   return Math.floor((Date.now() - vmStartTime) / 1000);
 }
 
-function ensurePulseAudio(): boolean {
-  try {
-    execSync("pulseaudio --start --daemonize 2>/dev/null || true", { stdio: "ignore" });
-    // Give PA a moment to initialise before we query sinks
-    execSync("sleep 0.3", { stdio: "ignore" });
-    // Create virtual null sink for QEMU audio capture if it doesn't exist
-    execSync(
-      'pactl list sinks short 2>/dev/null | grep -q qemu_capture || ' +
-      'pactl load-module module-null-sink sink_name=qemu_capture sink_properties=device.description=QEMU_Audio 2>/dev/null || true',
-      { stdio: "ignore" }
-    );
-    // Verify sink actually exists now
-    execSync('pactl list sinks short 2>/dev/null | grep -q qemu_capture', { stdio: "ignore" });
-    logger.info("PulseAudio ensured");
-    return true;
-  } catch (e) {
-    logger.warn({ err: e }, "Could not start PulseAudio or verify sink — disabling audio for this launch");
-    return false;
+// PulseAudio env — ensure XDG_RUNTIME_DIR is set so PA can create its socket
+const PA_ENV: Record<string, string> = {
+  ...process.env as Record<string, string>,
+  XDG_RUNTIME_DIR: process.env["XDG_RUNTIME_DIR"] ?? "/tmp",
+  HOME: process.env["HOME"] ?? "/root",
+};
+
+function paExec(cmd: string) {
+  execSync(cmd, { stdio: "ignore", env: PA_ENV });
+}
+
+export function ensurePulseAudio(): boolean {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      // Start PulseAudio daemon if not running
+      paExec("pulseaudio --start --daemonize --exit-idle-time=-1 2>/dev/null || true");
+      // Wait for daemon to be ready (longer on first attempt)
+      const waitMs = attempt === 1 ? 600 : 300;
+      execSync(`sleep ${waitMs / 1000}`, { stdio: "ignore" });
+      // Create the null sink QEMU will output to
+      paExec(
+        'pactl list sinks short 2>/dev/null | grep -q qemu_capture || ' +
+        'pactl load-module module-null-sink sink_name=qemu_capture ' +
+        'sink_properties=device.description=QEMU_Audio 2>/dev/null'
+      );
+      // Verify it exists
+      paExec('pactl list sinks short 2>/dev/null | grep -q qemu_capture');
+      logger.info({ attempt }, "PulseAudio ready with qemu_capture sink");
+      return true;
+    } catch (e) {
+      logger.warn({ attempt, maxAttempts, err: e }, "PulseAudio setup attempt failed, retrying...");
+      if (attempt === maxAttempts) {
+        logger.error("PulseAudio failed after all attempts — audio will not work");
+        return false;
+      }
+    }
   }
+  return false;
 }
 
 export async function startVm(config: VmConfig): Promise<void> {
@@ -89,7 +109,7 @@ export async function startVm(config: VmConfig): Promise<void> {
     try { fs.unlinkSync(monitorSocket); } catch (_) {}
   }
 
-  // Only use audio if PulseAudio is actually ready
+  // Prepare audio — retry hard before giving up
   const audioReady = config.audioEnabled ? ensurePulseAudio() : false;
 
   const args: string[] = [
@@ -110,17 +130,22 @@ export async function startVm(config: VmConfig): Promise<void> {
       "-device", "intel-hda",
       "-device", "hda-duplex,audiodev=pa0"
     );
+  } else if (config.audioEnabled) {
+    // PA failed — start QEMU with a dummy null audio backend so it doesn't crash
+    args.push("-audiodev", "none,id=pa0");
   }
 
   if (config.networkEnabled) {
     args.push("-net", "nic", "-net", "user");
   }
 
-  logger.info({ args }, "Starting QEMU");
+  logger.info({ args, audioReady }, "Starting QEMU");
 
+  // Spawn with PulseAudio env vars so QEMU can connect to the PA socket
   const proc = spawn("qemu-system-x86_64", args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
+    env: PA_ENV,
   });
 
   vmProcess = proc;
