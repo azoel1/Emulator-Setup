@@ -3,7 +3,7 @@
   "ram": 512,
   "cpus": 1,
   "audioEnabled": true,
-  "audioDevice": "hda",
+  "audioDevice": "sb16",
   "pcMode": "pc",
   "networkEnabled": true,
   "vgaType": "std",

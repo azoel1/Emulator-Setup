@@ -154,13 +154,14 @@ export async function startVm(config: VmConfig): Promise<void> {
   ];
 
   if (audioReady) {
-    // AC97 is natively supported by Windows XP — intel-hda requires drivers XP doesn't have
+    // sb16 (ISA SoundBlaster 16) — Windows XP ships sb16.sys built-in, no driver install needed
+    // AC97/intel-hda both need extra drivers not present in stock XP images
     args.push(
       "-audiodev", `pa,id=pa0`,
-      "-device", "AC97,audiodev=pa0"
+      "-device", "sb16,audiodev=pa0"
     );
   } else if (config.audioEnabled) {
-    args.push("-audiodev", "none,id=pa0", "-device", "AC97,audiodev=pa0");
+    args.push("-audiodev", "none,id=pa0", "-device", "sb16,audiodev=pa0");
   }
 
   if (config.networkEnabled) {
